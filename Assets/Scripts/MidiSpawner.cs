@@ -12,6 +12,9 @@ public class MidiSpawner : MonoBehaviour
     [Header("Audio")]
     public AudioClip audioClip;
 
+    [Header("Tempo")]
+    public float bpm = 120f;
+
     [Header("Grid")]
     public float gridSize = 2.8f;
 
@@ -44,6 +47,7 @@ public class MidiSpawner : MonoBehaviour
     private float   prevAudioTime;
     private bool    isResetting;
     private int     colorCycle;
+    private float   originalBpm = 120f;
 
     // ── Palette ────────────────────────────────────────────────
     static readonly Color[] WallColors = {
@@ -365,9 +369,13 @@ public class MidiSpawner : MonoBehaviour
         { Debug.LogWarning($"MidiSpawner: トラック{idx}にイベントなし"); return; }
 
         uint tpqn = anim.ticksPerQuarterNote > 0 ? anim.ticksPerQuarterNote : 480u;
-        float spb = anim.tempo > 1000f
-            ? anim.tempo / 1_000_000f
-            : (anim.tempo > 0f ? 60f / anim.tempo : 0.5f);
+
+        // MIDIのオリジナルBPMを取得（tempoがマイクロ秒/beatの場合は変換）
+        originalBpm = anim.tempo > 1000f
+            ? 60_000_000f / anim.tempo
+            : (anim.tempo > 0f ? anim.tempo : 120f);
+
+        float spb = 60f / originalBpm;
 
         var pairs = new List<(float time, byte note)>();
         foreach (var ev in anim.events)
@@ -378,7 +386,7 @@ public class MidiSpawner : MonoBehaviour
         foreach (var (time, note) in pairs)
         { noteTimes.Add(time); noteNums.Add(note); }
 
-        Debug.Log($"MidiSpawner: {noteTimes.Count}個のノートオン / TPQN={tpqn} / tempo={anim.tempo}");
+        Debug.Log($"MidiSpawner: {noteTimes.Count}個のノートオン / TPQN={tpqn} / originalBPM={originalBpm} / targetBPM={bpm} / pitch={bpm/originalBpm:F2}x");
     }
 
     // ══ Audio ════════════════════════════════════════════════
@@ -389,6 +397,8 @@ public class MidiSpawner : MonoBehaviour
         audioSource.clip        = audioClip;
         audioSource.loop        = true;
         audioSource.playOnAwake = false;
+        // BPM比率でpitchを設定 → 音速とaudioSource.timeの進みが両方スケールされMIDIと自動同期
+        audioSource.pitch = originalBpm > 0f ? bpm / originalBpm : 1f;
         if (audioClip) audioSource.Play();
         else Debug.LogWarning("MidiSpawner: AudioClip未設定");
     }
