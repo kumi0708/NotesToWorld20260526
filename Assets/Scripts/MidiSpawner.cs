@@ -83,6 +83,10 @@ public class MidiSpawner : MonoBehaviour
         camLookAt = Vector3.zero;
         camDist   = minZoom;
 
+        // TimeManager がシーンになければ自動生成
+        if (TimeManager.Instance == null)
+            new GameObject("TimeManager").AddComponent<TimeManager>();
+
         // スポーンオブジェクトをまとめる親
         var srGo = new GameObject("SpawnRoot");
         srGo.transform.SetParent(transform);
@@ -92,29 +96,65 @@ public class MidiSpawner : MonoBehaviour
         CreateEnvironment();
         ParseMidi();
         SetupAudio();
+
+        TimeManager.Instance.OnBpmChanged += OnBpmChanged;
         EnqueueHouse(Vector2Int.zero);
     }
 
-    void Update()
+    void OnDestroy()
     {
-        if (audioSource == null || !audioSource.isPlaying) return;
+        if (TimeManager.Instance != null)
+            TimeManager.Instance.OnBpmChanged -= OnBpmChanged;
+    }
+
+    void OnBpmChanged(float newBpm)
+    {
+        if (audioSource != null)
+            audioSource.pitch = TimeManager.Instance.SpeedRatio;
+    }
+
+void Update()
+    {
+        if (audioSource == null) return;
+
+        // AudioSourceが意図せず停止していたら再開
+        if (!audioSource.isPlaying && audioSource.clip != null && !isResetting)
+        {
+            Debug.LogWarning("[MidiSpawner] AudioSource停止を検出 → 再開");
+            audioSource.Play();
+            noteIndex    = 0;
+            prevAudioTime = 0f;
+            return;
+        }
+
+        if (!audioSource.isPlaying) return;
         float t = audioSource.time;
 
-        // 前フレームより0.1秒以上巻き戻ったらループ（pitch変化に依存しない）
-        if (!isResetting && t < prevAudioTime - 0.1f)
-            StartCoroutine(ResetLoop());
+        if (!isResetting)
+        {
+            // ループ検出1: 時間が0.1秒以上逆行
+            bool loopByJump = t < prevAudioTime - 0.1f;
+            // ループ検出2: 全ノート消化済み かつ tが0付近に戻った
+            bool loopByWrap = noteIndex >= noteTimes.Count
+                           && noteTimes.Count > 0
+                           && t < 0.1f
+                           && prevAudioTime > 0.1f;
+
+            if (loopByJump || loopByWrap)
+            {
+                Debug.Log($"[MidiSpawner] ループ検出 jump={loopByJump} wrap={loopByWrap} t={t:F3} prev={prevAudioTime:F3}");
+                StartCoroutine(ResetLoop());
+            }
+        }
+
         prevAudioTime = t;
 
         if (!isResetting)
         {
-            // noteIndexが末尾を超えたらループ検出を待つ（高BPM時の安全策）
-            if (noteIndex < noteTimes.Count)
+            while (noteIndex < noteTimes.Count && noteTimes[noteIndex] <= t)
             {
-                while (noteIndex < noteTimes.Count && noteTimes[noteIndex] <= t)
-                {
-                    TriggerSpawn(noteNums[noteIndex]);
-                    noteIndex++;
-                }
+                TriggerSpawn(noteNums[noteIndex]);
+                noteIndex++;
             }
         }
 
@@ -131,8 +171,8 @@ public class MidiSpawner : MonoBehaviour
         float spread   = CalcSpread(center);
         float target   = Mathf.Clamp(spread * 2.4f, minZoom, maxZoom);
 
-        camLookAt = Vector3.Lerp(camLookAt, center, Time.deltaTime * panSpeed);
-        camDist   = Mathf.Lerp(camDist,   target,  Time.deltaTime * zoomSpeed);
+        camLookAt = Vector3.Lerp(camLookAt, center, TimeManager.Instance.BpmDeltaTime * panSpeed);
+        camDist   = Mathf.Lerp(camDist,   target,  TimeManager.Instance.BpmDeltaTime * zoomSpeed);
 
         ApplyCameraTransform();
     }
@@ -164,13 +204,13 @@ public class MidiSpawner : MonoBehaviour
 
     void TriggerSpawn(byte note)
     {
-        int s = spawnSerial;
-        if (s % 7 == 6)      SpawnFlower();
-        else if (s % 3 == 2) SpawnTree();
-        else                  SpawnHouse();
+        int s = spawnSerial++; // 失敗しても必ず進める
+        if (s % 7 == 6)      SpawnFlower(s);
+        else if (s % 3 == 2) SpawnTree(s);
+        else                  SpawnHouse(s);
     }
 
-    void SpawnHouse()
+    void SpawnHouse(int serial)
     {
         var queue = houseFront.Count > 0 ? houseFront : treeFront;
         if (queue.Count == 0) return;
@@ -180,7 +220,7 @@ public class MidiSpawner : MonoBehaviour
         var wall = WallColors[colorCycle % WallColors.Length];
         colorCycle++;
 
-        var root = MakeRoot($"House_{spawnSerial++}", pos);
+        var root = MakeRoot($"House_{serial}", pos);
         BuildHouse(root.transform, wall, RoofBrown);
         StartCoroutine(PopIn(root.transform, 0.28f));
         RegisterObject(root, pos);
@@ -189,7 +229,7 @@ public class MidiSpawner : MonoBehaviour
         foreach (var d in DiagonalDirs) EnqueueTree(cell + d);
     }
 
-    void SpawnTree()
+    void SpawnTree(int serial)
     {
         var queue = treeFront.Count > 0 ? treeFront : houseFront;
         if (queue.Count == 0) return;
@@ -199,7 +239,7 @@ public class MidiSpawner : MonoBehaviour
         var pos    = GridPos(cell) + jitter;
         var leaf   = Random.value > 0.65f ? LeafWhite : LeafGreen;
 
-        var root = MakeRoot($"Tree_{spawnSerial++}", pos);
+        var root = MakeRoot($"Tree_{serial}", pos);
         BuildTree(root.transform, leaf);
         StartCoroutine(PopIn(root.transform, 0.22f));
         RegisterObject(root, pos);
@@ -207,14 +247,14 @@ public class MidiSpawner : MonoBehaviour
         foreach (var d in CardinalDirs) EnqueueTree(cell + d);
     }
 
-    void SpawnFlower()
+    void SpawnFlower(int serial)
     {
         if (spawnedPos.Count == 0) return;
         var anchor = spawnedPos[Random.Range(0, spawnedPos.Count)];
         var pos    = anchor + new Vector3(Random.Range(-1.0f, 1.0f), 0f, Random.Range(-1.0f, 1.0f));
         var col    = Random.value > 0.5f ? FlowerPink : FlowerYell;
 
-        var root = MakeRoot($"Flower_{spawnSerial++}", pos);
+        var root = MakeRoot($"Flower_{serial}", pos);
         BuildFlower(root.transform, col);
         StartCoroutine(PopIn(root.transform, 0.18f));
         RegisterObject(root, pos);
@@ -315,7 +355,7 @@ public class MidiSpawner : MonoBehaviour
         float e = 0f;
         while (e < dur)
         {
-            e += Time.deltaTime;
+            e += TimeManager.Instance.BpmDeltaTime;
             float p = Mathf.Clamp01(e / dur);
             const float c1 = 1.70158f, c3 = c1 + 1f;
             float s = 1f + c3 * Mathf.Pow(p - 1f, 3f) + c1 * Mathf.Pow(p - 1f, 2f);
@@ -330,7 +370,7 @@ public class MidiSpawner : MonoBehaviour
         float e = 0f;
         while (e < dur)
         {
-            e += Time.deltaTime;
+            e += TimeManager.Instance.BpmDeltaTime;
             float p = Mathf.Clamp01(e / dur);
             if (t) t.localScale = Vector3.one * (1f - p * p * p);
             yield return null;
@@ -340,17 +380,15 @@ public class MidiSpawner : MonoBehaviour
 
     // ══ Loop reset ═══════════════════════════════════════════
 
-    IEnumerator ResetLoop()
+IEnumerator ResetLoop()
     {
         isResetting = true;
 
-        // SpawnRoot以下の子を全てポップアウトアニメーション
         foreach (Transform child in spawnRoot)
             StartCoroutine(PopOut(child, 0.22f));
 
-        yield return new WaitForSeconds(0.26f);
+        yield return new WaitForSeconds(TimeManager.Instance.ScaledWait(0.26f));
 
-        // SpawnRoot以下を一括削除
         foreach (Transform child in spawnRoot)
             Destroy(child.gameObject);
 
@@ -358,12 +396,20 @@ public class MidiSpawner : MonoBehaviour
         visited.Clear();
         houseFront.Clear();
         treeFront.Clear();
-        noteIndex = 0;
-        camLookAt = Vector3.zero;
+        noteIndex   = 0;
+        spawnSerial = 0;
+        colorCycle  = 0;
+        camLookAt   = Vector3.zero;
         camDist   = minZoom;
 
         EnqueueHouse(Vector2Int.zero);
+
+        // リセット完了時点のaudioSource.timeにprevAudioTimeを合わせる
+        // (高BPM時: 待機中に複数回クリップがループし prevが大きいまま残るのを防ぐ)
+        prevAudioTime = audioSource != null ? audioSource.time : 0f;
         isResetting = false;
+
+        Debug.Log($"[MidiSpawner] リセット完了 prevReset={prevAudioTime:F3}");
     }
 
     // ══ MIDI parsing ═════════════════════════════════════════
@@ -402,13 +448,6 @@ public class MidiSpawner : MonoBehaviour
 
     // ══ Public API ═══════════════════════════════════════════
 
-    public void SetBpm(float newBpm)
-    {
-        bpm = Mathf.Max(1f, newBpm);
-        if (audioSource != null)
-            audioSource.pitch = originalBpm > 0f ? bpm / originalBpm : 1f;
-    }
-
     // ══ Audio ════════════════════════════════════════════════
 
     void SetupAudio()
@@ -418,7 +457,8 @@ public class MidiSpawner : MonoBehaviour
         audioSource.loop        = true;
         audioSource.playOnAwake = false;
         // BPM比率でpitchを設定 → 音速とaudioSource.timeの進みが両方スケールされMIDIと自動同期
-        audioSource.pitch = originalBpm > 0f ? bpm / originalBpm : 1f;
+        TimeManager.Instance.SetOriginalBpm(originalBpm);
+        audioSource.pitch = TimeManager.Instance.SpeedRatio;
         if (audioClip) audioSource.Play();
         else Debug.LogWarning("MidiSpawner: AudioClip未設定");
     }

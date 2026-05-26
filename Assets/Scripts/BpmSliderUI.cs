@@ -13,13 +13,11 @@ public class BpmSliderUI : MonoBehaviour
     public float minBpm = 60f;
     public float maxBpm = 240f;
 
-    private MidiSpawner spawner;
-    private Slider      slider;
-    private TMP_Text    valueLabel;
+    private Slider   slider;
+    private TMP_Text valueLabel;
 
     void Start()
     {
-        spawner = FindAnyObjectByType<MidiSpawner>();
         BuildUI();
     }
 
@@ -72,7 +70,7 @@ public class BpmSliderUI : MonoBehaviour
         valueLabel.fontSize  = 18;
         valueLabel.alignment = TextAlignmentOptions.Center;
         valueLabel.color     = Color.white;
-        UpdateLabel(spawner != null ? spawner.bpm : 120f);
+        UpdateLabel(TimeManager.Instance != null ? TimeManager.Instance.Bpm : 120f);
 
         // ── Slider ──
         var sliderGo   = DefaultControls.CreateSlider(WhiteResources());
@@ -90,7 +88,7 @@ public class BpmSliderUI : MonoBehaviour
         slider.minValue     = minBpm;
         slider.maxValue     = maxBpm;
         slider.wholeNumbers = true;
-        slider.value        = spawner != null ? spawner.bpm : 120f;
+        slider.value        = TimeManager.Instance != null ? TimeManager.Instance.Bpm : 120f;
         slider.onValueChanged.AddListener(OnSliderChanged);
 
         StyleSlider(slider);
@@ -117,7 +115,7 @@ public class BpmSliderUI : MonoBehaviour
 
     void OnSliderChanged(float val)
     {
-        if (spawner != null) spawner.SetBpm(val);
+        TimeManager.Instance?.SetBpm(val);
         UpdateLabel(val);
     }
 
