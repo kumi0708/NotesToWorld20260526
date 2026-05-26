@@ -100,16 +100,21 @@ public class MidiSpawner : MonoBehaviour
         if (audioSource == null || !audioSource.isPlaying) return;
         float t = audioSource.time;
 
-        if (!isResetting && audioClip != null && t < prevAudioTime - audioClip.length * 0.5f)
+        // 前フレームより0.1秒以上巻き戻ったらループ（pitch変化に依存しない）
+        if (!isResetting && t < prevAudioTime - 0.1f)
             StartCoroutine(ResetLoop());
         prevAudioTime = t;
 
         if (!isResetting)
         {
-            while (noteIndex < noteTimes.Count && noteTimes[noteIndex] <= t)
+            // noteIndexが末尾を超えたらループ検出を待つ（高BPM時の安全策）
+            if (noteIndex < noteTimes.Count)
             {
-                TriggerSpawn(noteNums[noteIndex]);
-                noteIndex++;
+                while (noteIndex < noteTimes.Count && noteTimes[noteIndex] <= t)
+                {
+                    TriggerSpawn(noteNums[noteIndex]);
+                    noteIndex++;
+                }
             }
         }
 
