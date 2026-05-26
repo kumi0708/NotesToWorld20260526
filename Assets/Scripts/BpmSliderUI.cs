@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.UI;
 using TMPro;
 
 /// <summary>
@@ -31,7 +32,7 @@ public class BpmSliderUI : MonoBehaviour
         {
             var esGo = new GameObject("EventSystem");
             esGo.AddComponent<EventSystem>();
-            esGo.AddComponent<StandaloneInputModule>();
+            esGo.AddComponent<InputSystemUIInputModule>();
         }
 
         // ── Canvas ──
