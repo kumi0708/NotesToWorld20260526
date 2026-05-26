@@ -39,7 +39,7 @@ public class MidiSpawner : MonoBehaviour
     private Queue<Vector2Int> houseFront = new Queue<Vector2Int>();
     private Queue<Vector2Int> treeFront  = new Queue<Vector2Int>();
 
-    private List<GameObject> spawnedRoots = new List<GameObject>();
+    private Transform        spawnRoot;
     private List<Vector3>    spawnedPos   = new List<Vector3>();
 
     private Vector3 camLookAt;
@@ -82,6 +82,11 @@ public class MidiSpawner : MonoBehaviour
         mpb       = new MaterialPropertyBlock();
         camLookAt = Vector3.zero;
         camDist   = minZoom;
+
+        // スポーンオブジェクトをまとめる親
+        var srGo = new GameObject("SpawnRoot");
+        srGo.transform.SetParent(transform);
+        spawnRoot = srGo.transform;
 
         ApplyCameraTransform();
         CreateEnvironment();
@@ -212,7 +217,6 @@ public class MidiSpawner : MonoBehaviour
 
     void RegisterObject(GameObject root, Vector3 pos)
     {
-        spawnedRoots.Add(root);
         spawnedPos.Add(pos);
     }
 
@@ -235,6 +239,7 @@ public class MidiSpawner : MonoBehaviour
     GameObject MakeRoot(string name, Vector3 pos)
     {
         var go = new GameObject(name);
+        go.transform.SetParent(spawnRoot);
         go.transform.position = pos;
         return go;
     }
@@ -334,15 +339,16 @@ public class MidiSpawner : MonoBehaviour
     {
         isResetting = true;
 
-        foreach (var go in spawnedRoots)
-            if (go) StartCoroutine(PopOut(go.transform, 0.22f));
+        // SpawnRoot以下の子を全てポップアウトアニメーション
+        foreach (Transform child in spawnRoot)
+            StartCoroutine(PopOut(child, 0.22f));
 
         yield return new WaitForSeconds(0.26f);
 
-        foreach (var go in spawnedRoots)
-            if (go) Destroy(go);
+        // SpawnRoot以下を一括削除
+        foreach (Transform child in spawnRoot)
+            Destroy(child.gameObject);
 
-        spawnedRoots.Clear();
         spawnedPos.Clear();
         visited.Clear();
         houseFront.Clear();

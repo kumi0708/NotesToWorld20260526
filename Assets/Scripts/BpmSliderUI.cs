@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.EventSystems;
 using TMPro;
 
 /// <summary>
@@ -17,7 +18,7 @@ public class BpmSliderUI : MonoBehaviour
 
     void Start()
     {
-        spawner = FindFirstObjectByType<MidiSpawner>();
+        spawner = FindAnyObjectByType<MidiSpawner>();
         BuildUI();
     }
 
@@ -25,6 +26,14 @@ public class BpmSliderUI : MonoBehaviour
 
     void BuildUI()
     {
+        // ── EventSystem（スライダー入力に必須） ──
+        if (FindAnyObjectByType<EventSystem>() == null)
+        {
+            var esGo = new GameObject("EventSystem");
+            esGo.AddComponent<EventSystem>();
+            esGo.AddComponent<StandaloneInputModule>();
+        }
+
         // ── Canvas ──
         var canvasGo = new GameObject("BpmCanvas");
         DontDestroyOnLoad(canvasGo);
