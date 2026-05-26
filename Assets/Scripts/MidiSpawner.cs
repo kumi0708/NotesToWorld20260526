@@ -3,14 +3,18 @@ using System.Collections.Generic;
 using UnityEngine;
 using Klak.Timeline.Midi;
 
+[System.Serializable]
+public class MidiAudioPair
+{
+    public MidiFileAsset midiAsset;
+    public AudioClip     audioClip;
+}
+
 public class MidiSpawner : MonoBehaviour
 {
-    [Header("MIDI")]
-    public MidiFileAsset midiAsset;
-    public int trackIndex = 0;
-
-    [Header("Audio")]
-    public AudioClip audioClip;
+    [Header("Tracks (順番に再生)")]
+    public List<MidiAudioPair> tracks = new List<MidiAudioPair>();
+    public int midiTrackIndex = 0;   // MIDIファイル内のトラック番号
 
     [Header("Tempo")]
     public float bpm = 120f;
@@ -47,7 +51,10 @@ public class MidiSpawner : MonoBehaviour
     private float   prevAudioTime;
     private bool    isResetting;
     private int     colorCycle;
-    private float   originalBpm = 120f;
+    private float   originalBpm    = 120f;
+    private int     currentTrackIndex = 0;
+    private MidiFileAsset currentMidi;
+    private AudioClip     currentClip;
 
     // ── Palette ────────────────────────────────────────────────
     static readonly Color[] WallColors = {
@@ -94,7 +101,7 @@ public class MidiSpawner : MonoBehaviour
 
         ApplyCameraTransform();
         CreateEnvironment();
-        ParseMidi();
+        LoadTrackData(0);
         SetupAudio();
 
         TimeManager.Instance.OnBpmChanged += OnBpmChanged;
@@ -400,7 +407,12 @@ IEnumerator ResetLoop()
         spawnSerial = 0;
         colorCycle  = 0;
         camLookAt   = Vector3.zero;
-        camDist   = minZoom;
+        camDist     = minZoom;
+
+        // 次のトラックへ進んで再解析・オーディオ切り替え
+        currentTrackIndex = (currentTrackIndex + 1) % Mathf.Max(1, tracks.Count);
+        LoadTrackData(currentTrackIndex);
+        SwitchAudio();
 
         EnqueueHouse(Vector2Int.zero);
 
@@ -412,38 +424,46 @@ IEnumerator ResetLoop()
         Debug.Log($"[MidiSpawner] リセット完了 prevReset={prevAudioTime:F3}");
     }
 
-    // ══ MIDI parsing ═════════════════════════════════════════
+    // ══ Track loading ════════════════════════════════════════
 
-    void ParseMidi()
+    void LoadTrackData(int index)
     {
-        if (midiAsset == null || midiAsset.tracks == null || midiAsset.tracks.Length == 0)
-        { Debug.LogWarning("MidiSpawner: MIDIアセット未設定"); return; }
+        noteTimes.Clear();
+        noteNums.Clear();
 
-        int idx  = Mathf.Clamp(trackIndex, 0, midiAsset.tracks.Length - 1);
-        var anim = midiAsset.tracks[idx].template;
+        if (tracks == null || tracks.Count == 0)
+        { Debug.LogWarning("MidiSpawner: Tracksリストが空"); return; }
+
+        var pair = tracks[index % tracks.Count];
+        currentMidi = pair.midiAsset;
+        currentClip = pair.audioClip;
+
+        if (currentMidi == null || currentMidi.tracks == null || currentMidi.tracks.Length == 0)
+        { Debug.LogWarning($"MidiSpawner: Track[{index}] MIDIアセット未設定"); return; }
+
+        int midiIdx = Mathf.Clamp(midiTrackIndex, 0, currentMidi.tracks.Length - 1);
+        var anim    = currentMidi.tracks[midiIdx].template;
 
         if (anim.events == null || anim.events.Length == 0)
-        { Debug.LogWarning($"MidiSpawner: トラック{idx}にイベントなし"); return; }
+        { Debug.LogWarning($"MidiSpawner: Track[{index}] イベントなし"); return; }
 
         uint tpqn = anim.ticksPerQuarterNote > 0 ? anim.ticksPerQuarterNote : 480u;
 
-        // MIDIのオリジナルBPMを取得（tempoがマイクロ秒/beatの場合は変換）
         originalBpm = anim.tempo > 1000f
             ? 60_000_000f / anim.tempo
             : (anim.tempo > 0f ? anim.tempo : 120f);
 
         float spb = 60f / originalBpm;
 
-        var pairs = new List<(float time, byte note)>();
+        var evPairs = new List<(float time, byte note)>();
         foreach (var ev in anim.events)
-            if (ev.IsNoteOn) pairs.Add((ev.time * spb / tpqn, ev.data1));
+            if (ev.IsNoteOn) evPairs.Add((ev.time * spb / tpqn, ev.data1));
 
-        pairs.Sort((a, b) => a.time.CompareTo(b.time));
-
-        foreach (var (time, note) in pairs)
+        evPairs.Sort((a, b) => a.time.CompareTo(b.time));
+        foreach (var (time, note) in evPairs)
         { noteTimes.Add(time); noteNums.Add(note); }
 
-        Debug.Log($"MidiSpawner: {noteTimes.Count}個のノートオン / TPQN={tpqn} / originalBPM={originalBpm} / targetBPM={bpm} / pitch={bpm/originalBpm:F2}x");
+        Debug.Log($"[MidiSpawner] Track[{index}] {noteTimes.Count}ノート / BPM={originalBpm} / clip={currentClip?.name}");
     }
 
     // ══ Public API ═══════════════════════════════════════════
@@ -453,14 +473,24 @@ IEnumerator ResetLoop()
     void SetupAudio()
     {
         audioSource             = gameObject.AddComponent<AudioSource>();
-        audioSource.clip        = audioClip;
+        audioSource.clip        = currentClip;
         audioSource.loop        = true;
         audioSource.playOnAwake = false;
-        // BPM比率でpitchを設定 → 音速とaudioSource.timeの進みが両方スケールされMIDIと自動同期
         TimeManager.Instance.SetOriginalBpm(originalBpm);
         audioSource.pitch = TimeManager.Instance.SpeedRatio;
-        if (audioClip) audioSource.Play();
-        else Debug.LogWarning("MidiSpawner: AudioClip未設定");
+        if (currentClip) audioSource.Play();
+        else Debug.LogWarning("MidiSpawner: AudioClip未設定 (Track[0])");
+    }
+
+    void SwitchAudio()
+    {
+        if (audioSource == null) return;
+        audioSource.Stop();
+        audioSource.clip  = currentClip;
+        TimeManager.Instance.SetOriginalBpm(originalBpm);
+        audioSource.pitch = TimeManager.Instance.SpeedRatio;
+        if (currentClip) audioSource.Play();
+        else Debug.LogWarning($"[MidiSpawner] Track[{currentTrackIndex}] AudioClip未設定");
     }
 
     // ══ Environment ══════════════════════════════════════════
