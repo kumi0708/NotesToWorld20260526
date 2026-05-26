@@ -389,6 +389,15 @@ public class MidiSpawner : MonoBehaviour
         Debug.Log($"MidiSpawner: {noteTimes.Count}個のノートオン / TPQN={tpqn} / originalBPM={originalBpm} / targetBPM={bpm} / pitch={bpm/originalBpm:F2}x");
     }
 
+    // ══ Public API ═══════════════════════════════════════════
+
+    public void SetBpm(float newBpm)
+    {
+        bpm = Mathf.Max(1f, newBpm);
+        if (audioSource != null)
+            audioSource.pitch = originalBpm > 0f ? bpm / originalBpm : 1f;
+    }
+
     // ══ Audio ════════════════════════════════════════════════
 
     void SetupAudio()
