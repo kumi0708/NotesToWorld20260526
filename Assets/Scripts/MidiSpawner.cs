@@ -3,11 +3,22 @@ using System.Collections.Generic;
 using UnityEngine;
 using Klak.Timeline.Midi;
 
+public enum SpawnType { House, Tree, Flower, Rock, Lamp }
+
+[System.Serializable]
+public class NoteSpawnRule
+{
+    public byte      minNote  = 0;
+    public byte      maxNote  = 127;
+    public SpawnType spawnType = SpawnType.House;
+}
+
 [System.Serializable]
 public class MidiAudioPair
 {
     public MidiFileAsset midiAsset;
     public AudioClip     audioClip;
+    public bool isPlay = true;
 }
 
 public class MidiSpawner : MonoBehaviour
@@ -15,6 +26,16 @@ public class MidiSpawner : MonoBehaviour
     [Header("Tracks (順番に再生)")]
     public List<MidiAudioPair> tracks = new List<MidiAudioPair>();
     public int midiTrackIndex = 0;   // MIDIファイル内のトラック番号
+
+    [Header("Note Spawn Rules (上から順に評価、最初にマッチしたものを使用)")]
+    public List<NoteSpawnRule> noteSpawnRules = new List<NoteSpawnRule>
+    {
+        new NoteSpawnRule { minNote =  0, maxNote = 35,  spawnType = SpawnType.House  },
+        new NoteSpawnRule { minNote = 36, maxNote = 59,  spawnType = SpawnType.Tree   },
+        new NoteSpawnRule { minNote = 60, maxNote = 71,  spawnType = SpawnType.Flower },
+        new NoteSpawnRule { minNote = 72, maxNote = 83,  spawnType = SpawnType.Rock   },
+        new NoteSpawnRule { minNote = 84, maxNote = 127, spawnType = SpawnType.Lamp   },
+    };
 
     [Header("Tempo")]
     public float bpm = 120f;
@@ -120,7 +141,7 @@ public class MidiSpawner : MonoBehaviour
             audioSource.pitch = TimeManager.Instance.SpeedRatio;
     }
 
-void Update()
+    void Update()
     {
         if (audioSource == null) return;
 
@@ -211,10 +232,27 @@ void Update()
 
     void TriggerSpawn(byte note)
     {
-        int s = spawnSerial++; // 失敗しても必ず進める
-        if (s % 7 == 6)      SpawnFlower(s);
-        else if (s % 3 == 2) SpawnTree(s);
-        else                  SpawnHouse(s);
+        Debug.Log($"[MidiSpawner] TriggerSpawn note={note} serial={spawnSerial}");
+        int s = spawnSerial++;
+
+        SpawnType type = SpawnType.House;
+        foreach (var rule in noteSpawnRules)
+        {
+            if (note >= rule.minNote && note <= rule.maxNote)
+            {
+                type = rule.spawnType;
+                break;
+            }
+        }
+
+        switch (type)
+        {
+            case SpawnType.Flower: SpawnFlower(s); break;
+            case SpawnType.Tree:   SpawnTree(s);   break;
+            case SpawnType.Rock:   SpawnRock(s);   break;
+            case SpawnType.Lamp:   SpawnLamp(s);   break;
+            default:               SpawnHouse(s);  break;
+        }
     }
 
     void SpawnHouse(int serial)
@@ -265,6 +303,35 @@ void Update()
         BuildFlower(root.transform, col);
         StartCoroutine(PopIn(root.transform, 0.18f));
         RegisterObject(root, pos);
+    }
+
+    void SpawnRock(int serial)
+    {
+        if (spawnedPos.Count == 0) { SpawnHouse(serial); return; }
+        var anchor = spawnedPos[Random.Range(0, spawnedPos.Count)];
+        var pos    = anchor + new Vector3(Random.Range(-1.2f, 1.2f), 0f, Random.Range(-1.2f, 1.2f));
+
+        var root = MakeRoot($"Rock_{serial}", pos);
+        BuildRock(root.transform);
+        StartCoroutine(PopIn(root.transform, 0.15f));
+        RegisterObject(root, pos);
+    }
+
+    void SpawnLamp(int serial)
+    {
+        var queue = treeFront.Count > 0 ? treeFront : houseFront;
+        if (queue.Count == 0) return;
+
+        var cell   = queue.Dequeue();
+        var jitter = new Vector3(Random.Range(-0.2f, 0.2f), 0f, Random.Range(-0.2f, 0.2f));
+        var pos    = GridPos(cell) + jitter;
+
+        var root = MakeRoot($"Lamp_{serial}", pos);
+        BuildLamp(root.transform);
+        StartCoroutine(PopIn(root.transform, 0.20f));
+        RegisterObject(root, pos);
+
+        foreach (var d in CardinalDirs) EnqueueTree(cell + d);
     }
 
     void RegisterObject(GameObject root, Vector3 pos)
@@ -329,6 +396,17 @@ void Update()
             new Vector3(s, s * 0.65f, s * 0.82f), RockGray);
     }
 
+    void BuildLamp(Transform p)
+    {
+        var poleGray = new Color(0.25f, 0.25f, 0.28f);
+        AddPrim(PrimitiveType.Cylinder, p, "Pole",
+            new Vector3(0, 0.7f, 0), new Vector3(0.08f, 1.4f, 0.08f), poleGray);
+        AddBox(p, "Arm",
+            new Vector3(0.18f, 1.35f, 0), new Vector3(0.36f, 0.06f, 0.06f), poleGray);
+        AddPrim(PrimitiveType.Sphere, p, "Globe",
+            new Vector3(0.38f, 1.35f, 0), new Vector3(0.22f, 0.22f, 0.22f), new Color(1f, 0.95f, 0.70f));
+    }
+
     // ══ Primitive helpers ════════════════════════════════════
 
     GameObject AddBox(Transform p, string n, Vector3 lp, Vector3 sc, Color c) =>
@@ -388,7 +466,7 @@ void Update()
     // ══ Loop reset ═══════════════════════════════════════════
 
 IEnumerator ResetLoop()
-    {
+{
         isResetting = true;
 
         foreach (Transform child in spawnRoot)
@@ -411,7 +489,16 @@ IEnumerator ResetLoop()
 
         // 次のトラックへ進んで再解析・オーディオ切り替え
         currentTrackIndex = (currentTrackIndex + 1) % Mathf.Max(1, tracks.Count);
-        LoadTrackData(currentTrackIndex);
+
+		// tracksのisPlayがfalseなら次のトラックへ（全てfalseなら最初のトラックに戻る）
+		int attempts = 0;
+		while (!tracks[currentTrackIndex].isPlay && attempts < tracks.Count)
+		{
+			currentTrackIndex = (currentTrackIndex + 1) % Mathf.Max(1, tracks.Count);
+			attempts++;
+		}
+
+		LoadTrackData(currentTrackIndex);
         SwitchAudio();
 
         EnqueueHouse(Vector2Int.zero);
